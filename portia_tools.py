@@ -16,7 +16,7 @@ primary_class, primary_dist (km), primary_mmsi, per-class 0/1 columns, dist_<cla
 The code tolerates missing columns where it can.
 """
 from pathlib import Path
-import glob, re
+import glob, os, re
 import numpy as np
 import pandas as pd
 import soundfile as sf
@@ -29,19 +29,36 @@ WIN_S = 3.0
 
 
 # ------------------------------------------------------------------ manifests
+def _task_of(path):
+    p = path.lower().replace("-", "_")
+    if "binary" in p: return "binary"
+    if "single" in p: return "single"
+    if "multi" in p: return "multi"
+    return None
+
+
 def load_manifests(root="data/portia"):
     """All benchmark CSVs in one table with 'task' and 'split' columns (a window can appear in
-    several tasks). Split is taken from the file name (train / val / test)."""
-    rows = []
-    for task, folder in TASKS.items():
-        for f in sorted(glob.glob(f"{root}/**/{folder}/**/*.csv", recursive=True) +
-                        glob.glob(f"{root}/{folder}*.csv")):
-            m = re.search(r"(train|val|test)", Path(f).stem.lower())
-            df = pd.read_csv(f)
-            df["task"], df["split"] = task, (m.group(1) if m else "unknown")
-            rows.append(df)
+    several tasks). Finds CSVs anywhere under root; the task comes from the folder/file name
+    (binary / single / multi), the split from 'train' / 'val' / 'test' in the name."""
+    rows, seen = [], []
+    for f in sorted(glob.glob(f"{root}/**/*.csv", recursive=True)):
+        rel = os.path.relpath(f, root)
+        task = _task_of(rel)
+        m = re.search(r"(train|val|test)", Path(f).stem.lower())
+        if task is None or m is None: continue
+        df = pd.read_csv(f)
+        if "window_id" not in df: continue
+        df["task"], df["split"] = task, m.group(1)
+        rows.append(df); seen.append(rel)
     if not rows:
-        raise FileNotFoundError(f"No PORTIA CSVs under {root}. Unzip the three small benchmark zips there.")
+        csvs = glob.glob(f"{root}/**/*.csv", recursive=True)
+        raise FileNotFoundError(
+            f"No PORTIA benchmark CSVs found under {Path(root).resolve()}.\n"
+            f"CSV files there: {csvs[:10] or 'none'}\n"
+            "Unzip PORTIA_Binary_Detection.zip, PORTIA_Single_Vessel_Classification.zip and "
+            "PORTIA_Multi_Label_Monitoring.zip into that folder (or set PORTIA_ROOT).")
+    print(f"loaded {len(seen)} CSV files: " + ", ".join(seen))
     df = pd.concat(rows, ignore_index=True)
     df["start_utc"] = pd.to_datetime(df["start_utc"], utc=True, errors="coerce")
     for c in ["primary_dist"] + [f"dist_{k}_km" for k in CLASSES]:
