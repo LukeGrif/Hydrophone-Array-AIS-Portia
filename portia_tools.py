@@ -9,7 +9,7 @@ Expected layout (see README):
         PORTIA_Binary_Detection/               train/val/test CSVs   (from the small zips)
         PORTIA_Single_Vessel_Classification/
         PORTIA_Multi_Label_Monitoring/
-        audio/<window_id>.wav                  3 s, multi-channel, 32 kHz (only what you extracted)
+        audio/<window_id>.wav                  3 s, 4 channels (hydrophones = 0, 2, 3), 32 kHz (only what you extracted)
 
 Manifest columns (per the Zenodo description): window_id, start_utc, label_vessel, n_vessels,
 primary_class, primary_dist (km), primary_mmsi, per-class 0/1 columns, dist_<class>_km.
@@ -112,12 +112,24 @@ def window_path(window_id, audio_dir="data/portia/audio"):
     return p if p.suffix else p.with_suffix(".wav")
 
 
-def load_window(window_id, audio_dir="data/portia/audio"):
-    """(channels, samples) float32, or None if the window wasn't extracted."""
+# PORTIA WAVs have 4 channels: hydrophones on zero-based channels 0, 2, 3; channel 1 is the unused
+# input (silent). All share one hardware clock, so the channels are sample-synchronised (paper, Methods).
+HYDRO_CH = [0, 2, 3]
+
+
+def hydrophones(x):
+    """Keep only the hydrophone channels of a (channels, samples) array."""
+    return x[HYDRO_CH] if x.shape[0] == 4 else x
+
+
+def load_window(window_id, audio_dir="data/portia/audio", hydro_only=True):
+    """(channels, samples) float32, or None if the window wasn't extracted.
+    By default returns the 3 hydrophones only (raw channels 0, 2, 3 -> rows 0, 1, 2)."""
     p = window_path(window_id, audio_dir)
     if not p.exists(): return None, None
     x, sr = sf.read(p, dtype="float32", always_2d=True)
-    return x.T, sr
+    x = x.T
+    return (hydrophones(x) if hydro_only else x), sr
 
 
 def join_pass(windows, audio_dir="data/portia/audio"):
@@ -151,8 +163,9 @@ def band_level_db(x, sr, hop_s=0.25, fmin=20, fmax=2000):
 
 # ------------------------------------------------------------------ features for the baseline
 def logmel_stats(x, sr, n_mels=64, fmax=8000):
-    """Simple, robust clip features: mean + std of the log-mel spectrogram (all channels averaged)."""
+    """Simple, robust clip features: mean + std of the log-mel spectrogram (averaged over the 3 hydrophones)."""
     import librosa
+    x = hydrophones(x)
     m = np.mean([librosa.power_to_db(librosa.feature.melspectrogram(y=c, sr=sr, n_fft=2048, hop_length=512,
                                                                      n_mels=n_mels, fmax=min(fmax, sr / 2)))
                  for c in x], axis=0)

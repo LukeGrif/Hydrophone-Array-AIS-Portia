@@ -29,9 +29,9 @@ import portia_tools as pt
 
 ROOT = Path(os.environ.get("PORTIA_ROOT", "../data/portia" if Path.cwd().name == "notebooks" else "data/portia"))
 AUDIO = ROOT / "audio"
-# Hydrophone position: PLACEHOLDER near the Port of Valencia. Replace with the real coordinates from
-# PORTIA_Metadata / the paper before reading anything into the map.
-HYDRO_LAT, HYDRO_LON = 39.4440, -0.3150
+# Hydrophone position: APPROXIMATE, read off the red marker in Fig. 1 of the PORTIA paper (central basin,
+# Port of Valencia). Good to a few hundred metres at best - ask the authors for the exact coordinates.
+HYDRO_LAT, HYDRO_LON = 39.4400, -0.3180
 print("data:", ROOT.resolve(), "| audio windows on disk:", len(list(AUDIO.glob("*.wav"))) if AUDIO.exists() else 0)
 
 # %% md
@@ -90,7 +90,7 @@ ax.legend(); ax.set_title("AIS distance during each pass (up = closer)"); plt.sh
 import folium
 from matplotlib import cm, colors
 mp = folium.Map(location=[HYDRO_LAT, HYDRO_LON], zoom_start=14, tiles="OpenStreetMap")
-folium.Marker([HYDRO_LAT, HYDRO_LON], tooltip="hydrophone (placeholder position)",
+folium.Marker([HYDRO_LAT, HYDRO_LON], tooltip="hydrophone (approx., from paper Fig. 1)",
               icon=folium.Icon(color="black", icon="volume-up", prefix="fa")).add_to(mp)
 palette = ["red", "blue", "green", "purple", "orange", "darkred"]
 for j, r in enumerate(chosen.itertuples()):
@@ -174,7 +174,9 @@ plt.title("received level vs distance"); plt.show()
 # ## 5. Three hydrophones: does the time difference change as the ship passes?
 # With several hydrophones, a sound arrives at slightly different times at each. The **time difference
 # (GCC-PHAT)** between hydrophone pairs changes as the ship moves across the array. That's the basis of
-# **bearing** estimation. Turning it into an angle needs the array geometry (spacing), which is in the PORTIA paper.
+# **bearing** estimation. Turning it into an angle needs the array geometry. The paper only says the three hydrophones sit in a rigid
+# triangle at the quay wall; the spacing isn't given numerically, so ask the authors for it.
+# Note: raw channel 1 is unused, so `load_window` returns raw channels 0, 2, 3 as hydrophones 1, 2, 3.
 
 # %%
 def gcc_phat(a, b, sr, max_tau=0.05):

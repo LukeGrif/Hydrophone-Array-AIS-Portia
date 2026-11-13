@@ -71,3 +71,10 @@ notebooks/portia_ais_walkthrough.ipynb   the walkthrough (built from notebooks/b
 tests/make_fake_portia.py       fake dataset for testing without the real data
 data/                           not committed (git-ignored)
 ```
+
+## Notes from the PORTIA paper
+- WAVs have 4 channels: **hydrophones on channels 0, 2, 3; channel 1 is unused (silent)**. `load_window` returns only the 3 hydrophones.
+- One audio interface (Zoom AMS-44) for all hydrophones → shared clock, channels are synchronised (good for time-difference / bearing work).
+- Hydrophones sit in a rigid triangle at the quay wall; the spacing is not given as numbers in the text.
+- AIS came from the VesselFinder API, polled every minute. Raw positions are not released (security), only distances.
+- Hydrophone position in the notebook is approximate (read off Fig. 1). Pipeline code: https://gitlab.com/smaug2/portia-dataset-pipeline

@@ -22,7 +22,8 @@ def ship_audio(d_km, f_blade, n):
     bb = rng.standard_normal(n) * (1 + 0.5 * np.sin(2 * np.pi * f_blade / 5 * t))   # modulated cavitation
     tone = sum(np.sin(2 * np.pi * f_blade * k * t) / k for k in range(1, 6))
     x = amp * (0.6 * bb + 0.4 * tone)
-    return np.stack([np.roll(x, d) for d in (0, 3, 7)]).astype(np.float32) + noise(n)
+    y = np.stack([np.roll(x, d) for d in (0, 3, 7)]).astype(np.float32) + noise(n)
+    return np.insert(y, 1, 0.0, axis=0)                           # 4 ch, ch 1 unused like PORTIA
 
 k = 0
 for v in range(14):                                                # 14 vessels, 1-2 passes each
@@ -46,7 +47,7 @@ for v in range(14):                                                # 14 vessels,
             rows.append(r)
 for i in range(400):                                               # background windows
     wid = f"w{k:06d}.wav"; k += 1
-    sf.write(root / "audio" / wid, noise(int(SR * W)).T, SR, subtype="PCM_16")
+    sf.write(root / "audio" / wid, np.insert(noise(int(SR * W)), 1, 0.0, axis=0).T, SR, subtype="PCM_16")
     r = dict(window_id=wid, start_utc=(t_start + pd.Timedelta(hours=12, seconds=7 * i)).isoformat(),
              label_vessel=0, n_vessels=0, primary_class="", primary_dist="", primary_mmsi="")
     for c in classes: r[c] = 0; r[f"dist_{c}_km"] = ""
