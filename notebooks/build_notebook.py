@@ -47,8 +47,11 @@ print(f"{len(df)} rows, {len(win)} unique windows, {win['primary_mmsi'].nunique(
 display(df.groupby(["task", "split"]).size().unstack())
 
 # is the split really by vessel? (no MMSI in both train and test)
-m = {s: set(df[(df.split == s)]["primary_mmsi"].dropna()) for s in ["train", "val", "test"]}
-print("vessels in train AND test:", len(m["train"] & m["test"]), "| train AND val:", len(m["train"] & m["val"]))
+# Each benchmark is split on its own, so check within a task (a ship can be in binary/train and multi/test).
+for task, d in df.groupby("task"):
+    m = {s: set(d[d.split == s]["primary_mmsi"].dropna()) for s in ["train", "val", "test"]}
+    print(f"{task:7s} vessels in train&test: {len(m['train'] & m['test'])}  train&val: {len(m['train'] & m['val'])}"
+          f"  val&test: {len(m['val'] & m['test'])}")
 
 fig, ax = plt.subplots(1, 3, figsize=(15, 3.5))
 v = win[win.get("label_vessel", 1) == 1]
@@ -141,9 +144,14 @@ def show_pass(r, fmax=4000, play_sr=16000, max_play_s=180):
     ax[1].plot(tl, lvl, lw=0.8); ax[1].set_ylabel("level dB\n20-2000 Hz")
     S = librosa.amplitude_to_db(np.abs(librosa.stft(x[0], n_fft=4096, hop_length=1024)), ref=np.max)
     librosa.display.specshow(S, sr=sr, hop_length=1024, x_axis="s", y_axis="linear", ax=ax[2], cmap="magma", vmin=-70)
-    ax[2].set_ylim(0, fmax); ax[2].set_xlabel("seconds from start of pass  (black bands = no window in the dataset / not extracted)")
+    ax[2].set_ylim(0, fmax); ax[2].set_xlabel("seconds from start of pass  (black bands = gaps between windows; cyan = AIS closest point, green = loudest minute)")
     k = w.primary_dist.values.argmin()
-    for a_ in ax: a_.axvline(tw.iat[k], c="c", ls="--", lw=1)
+    # loudest minute (smoothed level) vs AIS closest point: a lag hints at AIS latency or stern-aspect noise
+    lv = pd.Series(lvl).rolling(int(60 / 0.25), center=True, min_periods=20).median().values
+    t_peak = tl[np.nanargmax(lv)] if np.isfinite(lv).any() else np.nan
+    for a_ in ax: a_.axvline(tw.iat[k], c="c", ls="--", lw=1); a_.axvline(t_peak, c="lime", ls=":", lw=1.2)
+    ax[1].plot(tl, lv, c="lime", lw=1)
+    print(f"AIS closest point at {tw.iat[k]:.0f} s, loudest (1-min median) at {t_peak:.0f} s -> lag {t_peak - tw.iat[k]:+.0f} s")
     plt.tight_layout(); plt.show()
     y = librosa.resample(x[0], orig_sr=sr, target_sr=play_sr)
     print("whole pass (hydrophone 1, up to 3 min):"); display(Audio(y[: max_play_s * play_sr], rate=play_sr))
@@ -179,22 +187,43 @@ plt.title("received level vs distance"); plt.show()
 # Note: raw channel 1 is unused, so `load_window` returns raw channels 0, 2, 3 as hydrophones 1, 2, 3.
 
 # %%
-def gcc_phat(a, b, sr, max_tau=0.05):
+def gcc_curve(a, b, sr, fmin, fmax, max_tau=0.003):
+    """Band-limited GCC-PHAT. Returns lags (ms) and the correlation curve."""
     n = len(a) + len(b); A, B = np.fft.rfft(a, n), np.fft.rfft(b, n)
-    R = A * np.conj(B); cc = np.fft.irfft(R / (np.abs(R) + 1e-12), n)
-    m = int(max_tau * sr); cc = np.concatenate([cc[-m:], cc[:m + 1]])
-    return (np.argmax(np.abs(cc)) - m) / sr
+    f = np.fft.rfftfreq(n, 1 / sr); R = A * np.conj(B)
+    R = np.where((f >= fmin) & (f <= fmax), R / (np.abs(R) + 1e-12), 0)
+    cc = np.fft.irfft(R, n); m = int(max_tau * sr)
+    return np.arange(-m, m + 1) / sr * 1000, np.concatenate([cc[-m:], cc[:m + 1]])
 
+BANDS = {"ship band 50-1000 Hz": (50, 1000), "clicks 3-12 kHz": (3000, 12000)}
+PAIRS = [(0, 1), (1, 2), (0, 2)]
 for s in [s for s in shown if s]:
-    if s["x"].shape[0] < 2: print("single channel - skipping"); continue
-    lags = {p: [] for p in [(0, 1), (0, 2), (1, 2)] if max(p) < s["x"].shape[0]}
-    for wid in s["w"].window_id:
+    w = s["w"]; imgs = {(b, p): [] for b in BANDS for p in PAIRS}
+    for wid in w.window_id:
         x, sr = pt.load_window(wid, AUDIO)
-        for p in lags: lags[p].append(np.nan if x is None else gcc_phat(x[p[0]], x[p[1]], sr) * 1000)
-    fig, ax = plt.subplots(figsize=(12, 3))
-    for p, v in lags.items(): ax.plot(s["tw"], v, "o", ms=3, label=f"hydrophones {p[0]+1}-{p[1]+1}")
-    ax.set_ylabel("time difference (ms)"); ax.set_xlabel("seconds from start of pass")
-    ax.set_title(f"{s['r'].cls} {s['r'].mmsi}: inter-hydrophone delay over the pass"); ax.legend(); plt.show()
+        for b, (lo, hi) in BANDS.items():
+            for p in PAIRS:
+                if x is None: imgs[(b, p)].append(None); continue
+                lag, c = gcc_curve(x[p[0]], x[p[1]], sr, lo, hi)
+                imgs[(b, p)].append(np.abs(c) / (np.abs(c).max() + 1e-12))
+    fig, ax = plt.subplots(len(BANDS), len(PAIRS), figsize=(15, 6), sharex=True, sharey=True)
+    for i, b in enumerate(BANDS):
+        for j, p in enumerate(PAIRS):
+            L = len(lag); M = np.array([c if c is not None else np.full(L, np.nan) for c in imgs[(b, p)]])
+            ax[i, j].pcolormesh(s["tw"], lag, M.T, cmap="magma", shading="nearest", vmin=0, vmax=1)
+            ax[i, j].set_title(f"{b}: hydrophones {p[0]+1}-{p[1]+1}", fontsize=9)
+            ax[i, j].axvline(s["tw"].iat[w.primary_dist.values.argmin()], c="c", ls="--", lw=1)
+        ax[i, 0].set_ylabel("delay (ms)")
+    for j in range(len(PAIRS)): ax[-1, j].set_xlabel("seconds from start of pass")
+    fig.suptitle(f"{s['r'].cls} {s['r'].mmsi}: GCC-PHAT delay over the pass (bright = strong arrival; cyan = AIS closest point)")
+    plt.tight_layout(); plt.show()
+
+# %% md
+# **Reading this:** a moving ship should draw a line whose delay **drifts** over the pass (the bearing changes).
+# A perfectly **flat** bright line that is the same for every ship is a **fixed** source next to the array
+# (snapping shrimp, quay machinery, or a reflection off the quay wall), not the ship. A useful sanity check:
+# delay(1-3) should equal delay(1-2) + delay(2-3) for a single source. The largest delay you ever see also
+# gives a lower bound on the hydrophone spacing (spacing >= delay x ~1500 m/s).
 
 # %% md
 # ## 6. Baseline: vessel present or not (binary detection), scored on the official test split
