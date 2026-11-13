@@ -52,6 +52,9 @@ for task, d in df.groupby("task"):
     m = {s: set(d[d.split == s]["primary_mmsi"].dropna()) for s in ["train", "val", "test"]}
     print(f"{task:7s} vessels in train&test: {len(m['train'] & m['test'])}  train&val: {len(m['train'] & m['val'])}"
           f"  val&test: {len(m['val'] & m['test'])}")
+    leak = (m["train"] & m["test"]) | (m["val"] & m["test"])
+    t = d[d.split == "test"]
+    print(f"        test windows from ships also in train/val: {t.primary_mmsi.isin(leak).sum()} of {len(t)}")
 
 fig, ax = plt.subplots(1, 3, figsize=(15, 3.5))
 v = win[win.get("label_vessel", 1) == 1]
@@ -145,7 +148,7 @@ def show_pass(r, fmax=4000, play_sr=16000, max_play_s=180):
     S = librosa.amplitude_to_db(np.abs(librosa.stft(x[0], n_fft=4096, hop_length=1024)), ref=np.max)
     librosa.display.specshow(S, sr=sr, hop_length=1024, x_axis="s", y_axis="linear", ax=ax[2], cmap="magma", vmin=-70)
     ax[2].set_ylim(0, fmax); ax[2].set_xlabel("seconds from start of pass  (black bands = gaps between windows; cyan = AIS closest point, green = loudest minute)")
-    k = w.primary_dist.values.argmin()
+    k = int(np.nanargmin(w.primary_dist.values))
     # loudest minute (smoothed level) vs AIS closest point: a lag hints at AIS latency or stern-aspect noise
     lv = pd.Series(lvl).rolling(int(60 / 0.25), center=True, min_periods=20).median().values
     t_peak = tl[np.nanargmax(lv)] if np.isfinite(lv).any() else np.nan
@@ -212,7 +215,7 @@ for s in [s for s in shown if s]:
             L = len(lag); M = np.array([c if c is not None else np.full(L, np.nan) for c in imgs[(b, p)]])
             ax[i, j].pcolormesh(s["tw"], lag, M.T, cmap="magma", shading="nearest", vmin=0, vmax=1)
             ax[i, j].set_title(f"{b}: hydrophones {p[0]+1}-{p[1]+1}", fontsize=9)
-            ax[i, j].axvline(s["tw"].iat[w.primary_dist.values.argmin()], c="c", ls="--", lw=1)
+            ax[i, j].axvline(s["tw"].iat[int(np.nanargmin(w.primary_dist.values))], c="c", ls="--", lw=1)
         ax[i, 0].set_ylabel("delay (ms)")
     for j in range(len(PAIRS)): ax[-1, j].set_xlabel("seconds from start of pass")
     fig.suptitle(f"{s['r'].cls} {s['r'].mmsi}: GCC-PHAT delay over the pass (bright = strong arrival; cyan = AIS closest point)")
